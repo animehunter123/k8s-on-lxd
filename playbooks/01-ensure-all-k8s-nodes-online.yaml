@@ -1,0 +1,20 @@
+---
+- name: Check SSH connectivity and root access
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Ping the host
+      ping:
+
+    - name: Check root access
+      command: whoami
+      register: whoami_result
+      changed_when: false
+
+    - name: Verify root access
+      assert:
+        that:
+          - whoami_result.stdout == "root"
+        fail_msg: "Root access failed on {{ inventory_hostname }}"
+        success_msg: "SSH and root access confirmed on {{ inventory_hostname }}"

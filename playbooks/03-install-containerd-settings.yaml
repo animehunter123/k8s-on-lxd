@@ -1,0 +1,14 @@
+---
+- hosts: control
+  become: true
+  tasks:
+    - name: Create /etc/containerd directory
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Generate and write default containerd config
+      shell: containerd config default | tee /etc/containerd/config.toml
+      register: containerd_config
+      changed_when: containerd_config.rc != 0
