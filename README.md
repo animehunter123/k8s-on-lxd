@@ -4,7 +4,7 @@ Attempting to build a simple k8s cluster but on a lxd host instead of physical o
 
 This was inspired by LearnLinuxTV, see his channel/vid: https://www.youtube.com/watch?v=U1VzcjCB_sY
 
-![Sample Photo of Lxd Kubernetes (k8s) Environment](https://github.com/user-attachments/assets/6f0bd7d1-2c9f-41bc-af20-782588adbed1 "A sample photo of the lxd environment running kuberenetes (k8s)")
+![Sample Photo of Lxd Kubernetes (k8s) Environment](https://github.com/user-attachments/assets/7b758110-0f8b-466c-b2cc-26072c171598 "A sample photo of the lxd environment running kuberenetes (k8s)")
 
 # Pre-reqs
 

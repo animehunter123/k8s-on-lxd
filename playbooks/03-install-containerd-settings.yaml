@@ -12,3 +12,10 @@
       shell: containerd config default | tee /etc/containerd/config.toml
       register: containerd_config
       changed_when: containerd_config.rc != 0
+
+    - name: Set SystemdCgroup to true in containerd config
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: '(SystemdCgroup\s*=\s*)false'
+        replace: '\1true'
+      # notify: Restart containerd
