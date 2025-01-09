@@ -19,7 +19,7 @@
         regexp: '(SystemdCgroup\s*=\s*)false'
         replace: '\1true'
     
-    # DISABLE SWAP b/c k8s WONT RUN IF YOU HAVE IT
+    # DISABLE SWAP b/c k8s WONT RUN IF YOU HAVE IT (lxd items are commented appropriately)
     - name: Disable swap for current session
       command: swapoff -a
       when: ansible_swaptotal_mb > 0
@@ -29,12 +29,44 @@
         regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
         replace: '# \1'
       when: ansible_swaptotal_mb > 0
-    - name: Set swappiness to 0
-      sysctl:
-        name: vm.swappiness
-        value: '0'
-        state: present
+    # - name: Set swappiness to 0
+    #   sysctl:
+    #     name: vm.swappiness
+    #     value: '0'
+    #     state: present
     - name: Remove swap file if it exists
       file:
         path: /swapfile
         state: absent
+
+    # ENABLE BRIDGING ipv4 on ALL HOSTS (is required for the cluster to communicate-wide)
+    - name: Add br_netfilter to /etc/modules-load.d/k8s.conf
+      ansible.builtin.lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: br_netfilter
+        create: yes
+
+    # - name: Enable bridging in sysctl.conf
+    #   ansible.posix.sysctl:
+    #     name: net.bridge.bridge-nf-call-iptables
+    #     value: '1'
+    #     state: present
+    #     reload: yes
+
+    - name: Enable IP forwarding in sysctl.conf
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        # reload: yes
+
+
+
+
+
+    - name: Reboot all machines (lxd takes up to 10 seconds to reboot FTW!!!!!!)
+      ansible.builtin.reboot:
+        msg: "Rebooting initiated by Ansible"
+        reboot_timeout: 600
+        post_reboot_delay: 10
+        test_command: whoami
