@@ -42,7 +42,8 @@
   become: true
   tasks:
     - name: Initialize Kubernetes cluster
-      shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name controller --pod-network-cidr=10.244.0.0/16
+      # shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name controller --pod-network-cidr=10.244.0.0/16
+      shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name {{ inventory_hostname }} --pod-network-cidr=10.244.0.0/16
       args:
         creates: /etc/kubernetes/admin.conf
       register: kubeadm_init
