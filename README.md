@@ -4,7 +4,7 @@ Attempting to build a simple k8s cluster but on a single lxd host instead of phy
 
 This was inspired by LearnLinuxTV, see his channel/vid: https://www.youtube.com/watch?v=U1VzcjCB_sY
 
-![Sample Photo of Lxd Kubernetes (k8s) Environment](https://github.com/user-attachments/assets/7b758110-0f8b-466c-b2cc-26072c171598 "A sample photo of the lxd environment running kuberenetes (k8s)")
+![Sample Photo of Lxd Kubernetes (k8s) Environment](https://github.com/user-attachments/assets/99251ea8-f4a0-430a-9ee0-ea99653d870d "A sample photo of the lxd environment running kuberenetes (k8s)")
 
 # How to Install
 
@@ -24,3 +24,14 @@ ssh k8ctl01 'sudo apt install -y linux-headers-generic linux-image-generic' ; ss
 ```
 * Run the ./start-k8s*.sh and follow the prompts, you should have a "Internal K8s Cluster" on your host (internal only) when done. Then you can deploy nginx hello or other webapps or microservices
 
+* When it is done you should have a multiple control plane node'd K8S cluster of (k8ctl01/02 and k8node01-3). The last important playbook will have:
+```
+Initialize the cluster on the first control node (k8ctl01).
+Set up the kubeconfig for the first control node.
+Install the Flannel network plugin.
+Generate a join command for additional control plane nodes.
+Join additional control plane nodes (k8ctl02 in your case).
+Generate a join command for worker nodes.
+Join worker nodes to the cluster.
+Deploy the nginx pod and service on the first control node.
+```

@@ -29,7 +29,6 @@
       apt:
         update_cache: yes
 
-
     - name: Install Kubernetes packages
       apt:
         name:
@@ -41,63 +40,78 @@
 - hosts: control
   become: true
   tasks:
-    - name: Initialize Kubernetes cluster
-      # VERY IMPORTANT --->> THIS IS HARDCODED, FIX IT BELOW TO MATCH YOUR CONTAINER NETWORK: --pod-network-cidr=10.244.0.0/16 
-      # shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name controller --pod-network-cidr=10.244.0.0/16
-      shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name {{ inventory_hostname }} --pod-network-cidr=10.6.0.0/16
+    - name: Initialize Kubernetes cluster on first control node
+      shell: kubeadm init --control-plane-endpoint=k8ctl01 --node-name k8ctl01 --pod-network-cidr=10.244.0.0/16 --ignore-preflight-errors=all
       args:
         creates: /etc/kubernetes/admin.conf
       register: kubeadm_init
+      when: inventory_hostname == groups['control'][0]
 
     - name: Create .kube directory
       file:
         path: $HOME/.kube
         state: directory
         mode: '0755'
+      when: inventory_hostname == groups['control'][0]
 
     - name: Copy admin.conf to user's kube config
       copy:
         src: /etc/kubernetes/admin.conf
         dest: $HOME/.kube/config
         remote_src: yes
-      when: kubeadm_init.changed
+      when: inventory_hostname == groups['control'][0] and kubeadm_init.changed
 
     - name: Change ownership of .kube/config
       file:
         path: $HOME/.kube/config
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      when: kubeadm_init.changed
+      when: inventory_hostname == groups['control'][0] and kubeadm_init.changed
 
     - name: Install Flannel overlay network
       shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-      when: kubeadm_init.changed
+      when: inventory_hostname == groups['control'][0] and kubeadm_init.changed
 
-    - name: Get join command
+    - name: Get join command for control plane
       shell: kubeadm token create --print-join-command
-      register: join_command
-      when: kubeadm_init.changed
+      register: join_command_control
+      when: inventory_hostname == groups['control'][0]
 
-    - name: Copy join command to local file
-      local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
-      when: kubeadm_init.changed
+    - name: Add control plane flag to join command
+      set_fact:
+        control_plane_join_command: "{{ join_command_control.stdout }} --control-plane --certificate-key $(kubeadm init phase upload-certs --upload-certs | grep -vw -e certificate -e Namespace)"
+      when: inventory_hostname == groups['control'][0]
+
+    - name: Join additional control plane nodes
+      shell: "{{ hostvars[groups['control'][0]]['control_plane_join_command'] }}"
+      when: inventory_hostname != groups['control'][0]
+      ignore_errors: yes
+
+    - name: Get join command for worker nodes
+      shell: kubeadm token create --print-join-command
+      register: join_command_worker
+      when: inventory_hostname == groups['control'][0]
+
+    - name: Copy worker join command to local file
+      local_action: copy content="{{ join_command_worker.stdout }}" dest="./worker-join-command"
+      when: inventory_hostname == groups['control'][0]
 
 - hosts: nodes
   become: true
   tasks:
-    - name: Copy join command from local file
+    - name: Copy worker join command from local file
       copy:
-        src: ./join-command
-        dest: /tmp/join-command.sh
+        src: ./worker-join-command
+        dest: /tmp/worker-join-command.sh
         mode: '0777'
 
-    - name: Join the cluster
-      command: sh /tmp/join-command.sh
+    - name: Join worker nodes to the cluster
+      command: sh /tmp/worker-join-command.sh
       register: join_cluster
       changed_when: join_cluster.rc == 0
       failed_when: join_cluster.rc != 0 and "This node has already been joined to the cluster" not in join_cluster.stderr
 
-- hosts: control
+- hosts: control[0]
   become: true
   tasks:
     - name: Create pod.yml
