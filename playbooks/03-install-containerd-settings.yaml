@@ -20,6 +20,7 @@
         replace: '\1true'
     
     # DISABLE SWAP b/c k8s WONT RUN IF YOU HAVE IT (lxd items are commented appropriately)
+    # They officially said this here: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
     - name: Disable swap for current session
       command: swapoff -a
       when: ansible_swaptotal_mb > 0

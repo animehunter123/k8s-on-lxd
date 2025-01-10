@@ -1,102 +1,105 @@
 ---
-- name: Set up Kubernetes Cluster
-  hosts: all
+- hosts: all
   become: true
-  vars:
-    control_plane_endpoint: "172.16.250.216"
-    pod_network_cidr: "10.244.0.0/16"
-
   tasks:
-    # - name: Add Kubernetes GPG key
-    #   ansible.builtin.get_url:
-    #     url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
-    #     dest: /etc/apt/keyrings/kubernetes.gpg
-    #     mode: '0644'
-    # - name: Add Kubernetes repository
-    #   ansible.builtin.apt_repository:
-    #     repo: deb [signed-by=/etc/apt/keyrings/kubernetes.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
-    #     state: present
-    #     filename: kubernetes
-    - name: Add Kubernetes GPG key
-      ansible.builtin.get_url:
-        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
-        dest: /usr/share/keyrings/kubernetes-archive-keyring.gpg
-        mode: '0644'
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
 
-    - name: Add Kubernetes repository
-      ansible.builtin.apt_repository:
-        repo: deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main
-        state: present
+    - name: Download and add Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Remove Kubernetes repository file
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        state: absent
+
+    - name: Add a fresh new copy Kubernetes repository to apt sources
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /'
+        create: yes
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
 
     - name: Install Kubernetes packages
-      ansible.builtin.apt:
+      apt:
         name:
           - kubeadm
           - kubectl
           - kubelet
         state: present
-        update_cache: yes
 
-- name: Initialize Kubernetes Cluster
-  hosts: control
+- hosts: control
   become: true
   tasks:
     - name: Initialize Kubernetes cluster
-      ansible.builtin.command:
-        cmd: "kubeadm init --control-plane-endpoint={{ control_plane_endpoint }} --node-name={{ inventory_hostname }} --pod-network-cidr={{ pod_network_cidr }}"
+      shell: kubeadm init --control-plane-endpoint={{ hostvars[groups['control'][0]]['ansible_default_ipv4']['address'] }} --node-name controller --pod-network-cidr=10.244.0.0/16
+      args:
+        creates: /etc/kubernetes/admin.conf
       register: kubeadm_init
-      changed_when: "'Your Kubernetes control-plane has initialized successfully' in kubeadm_init.stdout"
-      failed_when: 
-        - kubeadm_init.rc != 0
-        - "'The kubelet is not running' not in kubeadm_init.stderr"
 
     - name: Create .kube directory
-      ansible.builtin.file:
-        path: "$HOME/.kube"
+      file:
+        path: $HOME/.kube
         state: directory
         mode: '0755'
 
     - name: Copy admin.conf to user's kube config
-      ansible.builtin.copy:
+      copy:
         src: /etc/kubernetes/admin.conf
-        dest: "$HOME/.kube/config"
+        dest: $HOME/.kube/config
         remote_src: yes
+      when: kubeadm_init.changed
+
+    - name: Change ownership of .kube/config
+      file:
+        path: $HOME/.kube/config
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-        mode: '0644'
+      when: kubeadm_init.changed
 
-    - name: Install Flannel network
-      ansible.builtin.command:
-        cmd: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-      changed_when: false
+    - name: Install Flannel overlay network
+      shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      when: kubeadm_init.changed
 
     - name: Get join command
-      ansible.builtin.command: kubeadm token create --print-join-command
+      shell: kubeadm token create --print-join-command
       register: join_command
-      changed_when: false
+      when: kubeadm_init.changed
 
-    - name: Set join command fact
-      ansible.builtin.set_fact:
-        join_command: "{{ join_command.stdout_lines[0] }}"
+    - name: Copy join command to local file
+      local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
+      when: kubeadm_init.changed
 
-- name: Join Kubernetes Cluster
-  hosts: nodes
+- hosts: nodes
   become: true
   tasks:
-    - name: Join cluster
-      ansible.builtin.command: "{{ hostvars[groups['control'][0]]['join_command'] }} --node-name {{ inventory_hostname }}"
-      register: join_cluster
-      changed_when: "'This node has joined the cluster' in join_cluster.stdout"
-      failed_when:
-        - join_cluster.rc != 0
-        - "'Node is already part of a cluster' not in join_cluster.stderr"
+    - name: Copy join command from local file
+      copy:
+        src: ./join-command
+        dest: /tmp/join-command.sh
+        mode: '0777'
 
-- name: Deploy Nginx Pod
-  hosts: control[0]
+    - name: Join the cluster
+      command: sh /tmp/join-command.sh
+      register: join_cluster
+      changed_when: join_cluster.rc == 0
+      failed_when: join_cluster.rc != 0 and "This node has already been joined to the cluster" not in join_cluster.stderr
+
+- hosts: control
   become: true
   tasks:
     - name: Create pod.yml
-      ansible.builtin.copy:
+      copy:
         content: |
           apiVersion: v1
           kind: Pod
@@ -111,15 +114,13 @@
                 ports:
                   - containerPort: 80
                     name: "nginx-http"
-        dest: /tmp/pod.yml
+        dest: /home/{{ ansible_user }}/pod.yml
 
     - name: Apply pod.yml
-      ansible.builtin.command: kubectl apply -f /tmp/pod.yml
-      register: pod_apply
-      changed_when: "'created' in pod_apply.stdout"
+      command: kubectl apply -f /home/{{ ansible_user }}/pod.yml
 
     - name: Create service-nodeport.yml
-      ansible.builtin.copy:
+      copy:
         content: |
           apiVersion: v1
           kind: Service
@@ -134,30 +135,7 @@
                 targetPort: nginx-http
             selector:
               app: nginx
-        dest: /tmp/service-nodeport.yml
+        dest: /home/{{ ansible_user }}/service-nodeport.yml
 
     - name: Apply service-nodeport.yml
-      ansible.builtin.command: kubectl apply -f /tmp/service-nodeport.yml
-      register: service_apply
-      changed_when: "'created' in service_apply.stdout"
-
-- name: Reboot all machines
-  hosts: all
-  become: true
-  tasks:
-    - name: Reboot machine
-      ansible.builtin.reboot:
-        msg: "Rebooting initiated by Ansible"
-        reboot_timeout: 600
-        post_reboot_delay: 60
-        test_command: whoami
-
-
-
-
-    - name: Reboot all machines (lxd takes up to 10 seconds to reboot FTW!!!!!!)
-      ansible.builtin.reboot:
-        msg: "Rebooting initiated by Ansible"
-        reboot_timeout: 600
-        post_reboot_delay: 10
-        test_command: whoami
+      command: kubectl apply -f /home/{{ ansible_user }}/service-nodeport.yml
