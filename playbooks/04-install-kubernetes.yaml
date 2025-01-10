@@ -1,0 +1,163 @@
+---
+- name: Set up Kubernetes Cluster
+  hosts: all
+  become: true
+  vars:
+    control_plane_endpoint: "172.16.250.216"
+    pod_network_cidr: "10.244.0.0/16"
+
+  tasks:
+    # - name: Add Kubernetes GPG key
+    #   ansible.builtin.get_url:
+    #     url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+    #     dest: /etc/apt/keyrings/kubernetes.gpg
+    #     mode: '0644'
+    # - name: Add Kubernetes repository
+    #   ansible.builtin.apt_repository:
+    #     repo: deb [signed-by=/etc/apt/keyrings/kubernetes.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+    #     state: present
+    #     filename: kubernetes
+    - name: Add Kubernetes GPG key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/kubernetes-archive-keyring.gpg
+        mode: '0644'
+
+    - name: Add Kubernetes repository
+      ansible.builtin.apt_repository:
+        repo: deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+
+    - name: Install Kubernetes packages
+      ansible.builtin.apt:
+        name:
+          - kubeadm
+          - kubectl
+          - kubelet
+        state: present
+        update_cache: yes
+
+- name: Initialize Kubernetes Cluster
+  hosts: control
+  become: true
+  tasks:
+    - name: Initialize Kubernetes cluster
+      ansible.builtin.command:
+        cmd: "kubeadm init --control-plane-endpoint={{ control_plane_endpoint }} --node-name={{ inventory_hostname }} --pod-network-cidr={{ pod_network_cidr }}"
+      register: kubeadm_init
+      changed_when: "'Your Kubernetes control-plane has initialized successfully' in kubeadm_init.stdout"
+      failed_when: 
+        - kubeadm_init.rc != 0
+        - "'The kubelet is not running' not in kubeadm_init.stderr"
+
+    - name: Create .kube directory
+      ansible.builtin.file:
+        path: "$HOME/.kube"
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to user's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "$HOME/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_id }}"
+        mode: '0644'
+
+    - name: Install Flannel network
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      changed_when: false
+
+    - name: Get join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+
+    - name: Set join command fact
+      ansible.builtin.set_fact:
+        join_command: "{{ join_command.stdout_lines[0] }}"
+
+- name: Join Kubernetes Cluster
+  hosts: nodes
+  become: true
+  tasks:
+    - name: Join cluster
+      ansible.builtin.command: "{{ hostvars[groups['control'][0]]['join_command'] }} --node-name {{ inventory_hostname }}"
+      register: join_cluster
+      changed_when: "'This node has joined the cluster' in join_cluster.stdout"
+      failed_when:
+        - join_cluster.rc != 0
+        - "'Node is already part of a cluster' not in join_cluster.stderr"
+
+- name: Deploy Nginx Pod
+  hosts: control[0]
+  become: true
+  tasks:
+    - name: Create pod.yml
+      ansible.builtin.copy:
+        content: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: nginx-example
+            labels:
+              app: nginx
+          spec:
+            containers:
+              - name: nginx
+                image: linuxserver/nginx
+                ports:
+                  - containerPort: 80
+                    name: "nginx-http"
+        dest: /tmp/pod.yml
+
+    - name: Apply pod.yml
+      ansible.builtin.command: kubectl apply -f /tmp/pod.yml
+      register: pod_apply
+      changed_when: "'created' in pod_apply.stdout"
+
+    - name: Create service-nodeport.yml
+      ansible.builtin.copy:
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nginx-example
+          spec:
+            type: NodePort
+            ports:
+              - name: http
+                port: 80
+                nodePort: 30080
+                targetPort: nginx-http
+            selector:
+              app: nginx
+        dest: /tmp/service-nodeport.yml
+
+    - name: Apply service-nodeport.yml
+      ansible.builtin.command: kubectl apply -f /tmp/service-nodeport.yml
+      register: service_apply
+      changed_when: "'created' in service_apply.stdout"
+
+- name: Reboot all machines
+  hosts: all
+  become: true
+  tasks:
+    - name: Reboot machine
+      ansible.builtin.reboot:
+        msg: "Rebooting initiated by Ansible"
+        reboot_timeout: 600
+        post_reboot_delay: 60
+        test_command: whoami
+
+
+
+
+    - name: Reboot all machines (lxd takes up to 10 seconds to reboot FTW!!!!!!)
+      ansible.builtin.reboot:
+        msg: "Rebooting initiated by Ansible"
+        reboot_timeout: 600
+        post_reboot_delay: 10
+        test_command: whoami

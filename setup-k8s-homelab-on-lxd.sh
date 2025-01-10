@@ -42,13 +42,13 @@ echo
 
 read -p "PRESS ENTER TO CONTINUE, or CTRL C to CANCEL!!!"
 
-# echo "${CYAN}1. Ensuring all nodes are online and pingable...${RESET}"
 run_playbook "01*.yaml" "@@ 1. Ensuring all nodes are online and pingable..."
 
-# echo "${CYAN}2. Installing containerd everywhere...${RESET}"
 run_playbook "02*.yaml" "@@ 2. Installing containerd everywhere..."
 
-# echo "${CYAN}3. Setting the configs for containerd on the k8ctl's...${RESET}"
 run_playbook "03*.yaml" "@@ 3. Setting the configs for containerd on the k8ctl's..."
+
+run_playbook "04*.yaml" "@@ 4. Setting the configs for containerd on the k8ctl's..."
+
 
 echo "All playbooks executed successfully."
